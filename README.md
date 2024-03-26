@@ -1,0 +1,1 @@
+# rust-diesel-abstract-orm
