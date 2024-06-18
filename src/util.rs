@@ -24,6 +24,12 @@ pub fn type_is_option(type_name: &Type) -> bool {
     return false;
 }
 
+pub fn type_contains(type_name: &Type, pattern: &str) -> bool {
+    let string = format!{"{}", quote!{ #type_name }};
+
+    return string.contains(pattern);
+}
+
 pub fn extract_type_from_option(ty: &Type) -> Type {
     match ty {
         Type::Path(typepath) if typepath.qself.is_none() && path_is_option(&typepath.path) => {

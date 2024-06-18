@@ -51,7 +51,7 @@ impl Parse for ManyToManyAttr {
     }
 }
 
-#[proc_macro_derive(Joinable, attributes(many_to_one, one_to_many, many_to_many))]
+#[proc_macro_derive(Joinable, attributes(many_to_one, one_to_many, many_to_many, with_guard))]
 #[proc_macro_error]
 pub fn with_join(input: TokenStream) -> TokenStream {
     // Parse the string representation
@@ -73,6 +73,7 @@ pub fn with_join(input: TokenStream) -> TokenStream {
             for struct_attr in ast.attrs {
                 let is_one_to_many = struct_attr.meta.path().is_ident("one_to_many");
                 let is_many_to_many = struct_attr.meta.path().is_ident("many_to_many");
+                let is_with_guard = struct_attr.meta.path().is_ident("with_guard");
                 if is_one_to_many {
                     let arguments = struct_attr
                     .meta
@@ -115,6 +116,16 @@ pub fn with_join(input: TokenStream) -> TokenStream {
                         eager_entity.push_many_to_many(&field_name.clone(), &type_name.clone(), &join_type_.clone());
                     }
                 }
+                if is_with_guard {
+                    let query_path = struct_attr
+                    .meta
+                    .require_list()
+                    .expect("can not parse with_guard")
+                    .parse_args_with(Punctuated::<syn::Ident, Token![.]>::parse_terminated)
+                    .expect("error parsing with_guard as type parameters");
+
+                    println!("query path guards: {:?}", query_path);
+                }
                 if struct_attr.meta.path().is_ident("diesel"){
                     if let Ok(arguments) = struct_attr.meta.require_list() {
                         entity_impl.parse_diesel_attr(&arguments);
@@ -150,7 +161,6 @@ pub fn with_join(input: TokenStream) -> TokenStream {
                 }
                 _ => {},
             }
-            eager_entity.prepare();
 
             let eager_entity_ast = eager_entity.build();
 
@@ -160,25 +170,44 @@ pub fn with_join(input: TokenStream) -> TokenStream {
 
             let ident_save = util::format_ident("New{}", &ast.ident);
 
-            let mut table_ref_quote = quote!{};
+            let get_for = if original_type.to_string().contains("To") {
+                let pk1 = save_object_fields[0].ident.clone().unwrap();
+                let pk2 = save_object_fields[1].ident.clone().unwrap();
+                let get_for_pk1 = util::format_ident("get_for_{}", &pk1);
+                let get_for_pk2 = util::format_ident("get_for_{}", &pk2);
+                quote!{
+                    impl #original_type {
+                        pub fn #get_for_pk1(&self) -> i64 {
+                            self.#pk2
+                        }
+                        pub fn #get_for_pk2(&self) -> i64 {
+                            self.#pk1
+                        }
+                    }
+                }
+            }else {
+                quote!{}
+            };
 
-            if let Some(table_name_) = &entity_impl.table_name.clone() {
-                table_ref_quote = quote!{
+            let table_ref_quote = if let Some(table_name_) = &entity_impl.table_name.clone() {
+                quote!{
                     #[derive(diesel::Insertable, Serialize, Deserialize)]
                     #[diesel(table_name = #table_name_)]
                     pub struct #ident_save {
                         #(#save_object_fields),*
                     }
-                };
-            }else {
+                }
+            } else {
                 println!("no table name was found");
-            }
+                quote!{}
+            };
 
             let ret_value = quote! {
                 #table_ref_quote
                 #eager_entity_ast
                 #entity_impl_ast
                 #lazy_entity_ast
+                #get_for
             };
             
             println!("macro {}", ret_value);

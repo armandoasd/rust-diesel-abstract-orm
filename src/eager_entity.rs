@@ -14,6 +14,7 @@ pub struct EagerEntityAST {
 }
 
 impl EagerEntityAST {
+
     pub fn new(original_type: &Ident) -> Self {
         Self {
             original_type: original_type.clone(),
@@ -26,6 +27,7 @@ impl EagerEntityAST {
             one_to_many_data_assign: Vec::new(),
         }
     }
+
     pub fn push_many_to_one(&mut self, field_name:&Ident, type_name:Type){
         let gen_field_name = field_name.to_string().replace("_id", "");
         let gen_field_ident =
@@ -35,6 +37,7 @@ impl EagerEntityAST {
         self.eager_rel_default_assign.push(quote!{#gen_field_ident,});
         self.eager_rel_fields.push(quote! { pub #gen_field_ident: #type_name, });
     }
+
     pub fn push_one_to_many(&mut self, field_name:Ident, type_name:Type){
         self.rel_params.push(field_name.clone());
         let optional_type:Type = syn::parse_quote!{Option<#type_name>};
@@ -50,18 +53,6 @@ impl EagerEntityAST {
 
     pub fn push_many_to_many(&mut self, field_name:&Ident, type_name:&Type, join_type: &Type){
         self.push_one_to_many(field_name.clone(), type_name.clone());
-    }
-
-    fn sort_many_to_one_params(&mut self){
-        // let mut many_to_one_params_zip:Vec<(Ident,Type)> = self.many_to_one_params.drain(..).zip(self.many_to_one_params_t.drain(..)).collect();
-        // many_to_one_params_zip.sort_by(|(a,_), (b,_)| a.to_string().cmp(&b.to_string()));
-        // let (mut many_to_one_params_sorted, mut many_to_one_params_t_sorted) = many_to_one_params_zip.into_iter().unzip();
-        // self.rel_params.append(&mut many_to_one_params_sorted);
-        // self.rel_params_t.append(&mut many_to_one_params_t_sorted);
-    }
-
-    pub fn prepare(&mut self){
-        self.sort_many_to_one_params();
     }
 
     pub fn build(self)->TokenStream2 {

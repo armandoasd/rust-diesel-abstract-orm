@@ -42,12 +42,23 @@ impl LazyEntityAST {
         
     }
     pub fn push_one_to_many(&mut self, field_name:&Ident, type_name:&Type){
-        self.rel_fields_lazy.push(syn::parse_quote! { pub #field_name: Option<Vec<#type_name>> });
-        self.rel_default_assign_lazy.push(syn::parse_quote! { #field_name: None});
-        self.field_type_map.insert(field_name.clone(), TypeData {
-            type_name: type_name.clone(),
-            is_vector: true
-        });
+
+        if util::type_contains(&type_name, "To") {
+            let type_name_i: syn::Type = syn::parse_quote!{i64};
+            self.rel_fields_lazy.push(syn::parse_quote! { pub #field_name: Option<Vec<#type_name_i>> });
+            self.rel_default_assign_lazy.push(syn::parse_quote! { #field_name: None});
+            self.field_type_map.insert(field_name.clone(), TypeData {
+                type_name: type_name_i.clone(),
+                is_vector: true
+            });
+        } else {
+            self.rel_fields_lazy.push(syn::parse_quote! { pub #field_name: Option<Vec<#type_name>> });
+            self.rel_default_assign_lazy.push(syn::parse_quote! { #field_name: None});
+            self.field_type_map.insert(field_name.clone(), TypeData {
+                type_name: type_name.clone(),
+                is_vector: true
+            });
+        }
     }
 
     pub fn push_many_to_many(&mut self, field_name:&Ident, type_name:&Type){

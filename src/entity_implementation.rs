@@ -9,6 +9,7 @@ pub struct EntityImplAST {
     pub table_name:Option<Type>,
     join_statements: BTreeMap<Ident,TokenStream2>,
     rel_types_map: BTreeMap<Ident,Type>,
+    rel_with_join_map: BTreeMap<Ident,Type>,
     model_pk: Vec<Ident>,
     model_pk_t: BTreeMap<Ident,Type>,
     rel_collect_types: Vec<Type>
@@ -24,12 +25,27 @@ impl EntityImplAST {
             model_pk_t: BTreeMap::new(),
             join_statements: BTreeMap::new(),
             rel_types_map: BTreeMap::new(),
+            rel_with_join_map: BTreeMap::new(),
             rel_collect_types: Vec::new(),
         }
     }
     
     pub fn set_table_name(&mut self, table_name:syn::Type){
         self.table_name = Some(table_name);
+    }
+
+
+    pub fn get_table_name_ident(&self) -> Option<syn::Ident> {
+        match &self.table_name {
+            Some(syn::Type::Path(typepath)) => {
+                if let Some(last) = typepath.path.segments.last() {
+                    Some(last.ident.clone())
+                }else {
+                    None
+                }
+            },
+            _=>{None}
+        }
     }
 
     pub fn parse_diesel_attr(&mut self, meta_args: &syn::MetaList){
@@ -112,6 +128,9 @@ impl EntityImplAST {
         self.join_statements.insert(field_name.clone(), quote!{
             .left_join(#type_name::get_table_ref())
         });
+        if util::type_contains(&type_name, "To") {
+            self.rel_with_join_map.insert(field_name.clone(), type_name.clone());
+        }
         self.rel_types_map.insert(field_name.clone(), util::make_type_option(type_name));
     }
 
@@ -186,7 +205,7 @@ impl EntityImplAST {
             return quote!{
                 pub fn find_all_eager(
                     conn: &mut MysqlConnection
-                )->Vec<#ident_with_all>{
+                )->Result<Vec<#ident_with_all>, diesel::result::Error>{
                     use crate::schema::*;
                 
                     let mut ret_data:Vec<#ident_with_all> = Vec::new();
@@ -195,7 +214,7 @@ impl EntityImplAST {
                     let all_rows = #table_name::table
                         #(#join_stmts)*
                         .select((#original_type::as_select(), #(#rel_collect_types::as_select()),*))
-                        .load::<(#original_type, #(#rel_collect_types),*)>(conn).unwrap();
+                        .load::<(#original_type, #(#rel_collect_types),*)>(conn)?;
                 
                     
                     for query_row in all_rows {
@@ -209,7 +228,7 @@ impl EntityImplAST {
                         }
                     }
                 
-                    return ret_data;
+                    Ok(ret_data)
                 }
             }
         }else {
@@ -225,13 +244,25 @@ impl EntityImplAST {
         if model_pk.len() == 0 {
             for (f_name, join_stmt) in join_statements {
                 let fn_ident = util::format_ident("find_all_with_{}", &f_name);
+                let fn_ident_limit = util::format_ident("find_n_with_{}", &f_name);
                 let set_fn_ident = util::format_ident("push_or_set_{}", &f_name);
                 let select_type = self.rel_types_map.get(&f_name).unwrap();
+                let many_rel = self.rel_with_join_map.get(&f_name);
+                let table_name_i = self.get_table_name_ident().unwrap();
+                let join_id_field = util::format_ident("get_for_{}_id", &table_name_i);
             
                 let data_assign = if util::type_is_option(select_type) {
-                    quote!{
-                        if let Some(val) = #f_name {
-                            data.#set_fn_ident(val);
+                    if many_rel.is_some() {
+                        quote!{
+                            if let Some(val) = #f_name {
+                                data.#set_fn_ident(val.#join_id_field());
+                            }
+                        }
+                    }else {
+                        quote!{
+                            if let Some(val) = #f_name {
+                                data.#set_fn_ident(val);
+                            }
                         }
                     }
                 }else {
@@ -242,14 +273,14 @@ impl EntityImplAST {
                 output.push(quote!{
                     pub fn #fn_ident(
                         conn: &mut MysqlConnection
-                    )->Vec<#ident_lazy>{
+                    )->Result<Vec<#ident_lazy>, diesel::result::Error>{
                         let mut ret_data:Vec<#ident_lazy> = Vec::new();
                         let mut last_id = 0;
     
                         let all_rows = #table_name::table
                             #join_stmt
                             .select((#original_type::as_select(), #select_type::as_select()))
-                            .load::<(#original_type, #select_type)>(conn).unwrap();
+                            .load::<(#original_type, #select_type)>(conn)?;
     
                         for (self_data, #f_name) in all_rows {
                             let current_id = self_data.id;
@@ -264,9 +295,40 @@ impl EntityImplAST {
                             }
                         }
                     
-                        return ret_data;
+                        Ok(ret_data)
                     }
                 });
+                // output.push(quote!{
+                //     pub fn #fn_ident_limit(
+                //         limit: i64,
+                //         conn: &mut MysqlConnection
+                //     )->Result<Vec<#ident_lazy>, diesel::result::Error>{
+                //         let mut ret_data:Vec<#ident_lazy> = Vec::new();
+                //         let mut last_id = 0;
+
+                //         let (main_ent1, main_ent2) = diesel::alias!(#table_name as main_ent1, #table_name as main_ent2);
+                //         let all_rows = main_ent1
+                //             #join_stmt
+                //             .filter(main_ent1.field(#table_name::id).eq_any(main_ent2.select(main_ent2.field(#table_name::id)).limit(limit)))
+                //             .select((main_ent1.fields(#table_name::all_columns), #select_type::as_select()))
+                //             .load::<(#original_type, #select_type)>(conn)?;
+    
+                //         for (self_data, #f_name) in all_rows {
+                //             let current_id = self_data.id;
+                //             if last_id == current_id {
+                //                 let mut data = ret_data.last_mut().unwrap();
+                //                 #data_assign
+                //             }else {
+                //                 let mut data = #ident_lazy::init(self_data);
+                //                 #data_assign;
+                //                 ret_data.push(data);
+                //                 last_id = current_id;
+                //             }
+                //         }
+                    
+                //         Ok(ret_data)
+                //     }
+                // });
             }
         }
 
